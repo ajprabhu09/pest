@@ -1080,6 +1080,67 @@ impl<'i, R: RuleType> ParserState<'i, R> {
         }
     }
 
+       /// Matches part of the state of the stack.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pest::{self, MatchDir};
+    /// # #[allow(non_camel_case_types)]
+    /// # #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    /// enum Rule {}
+    ///
+    /// let input = "abcd cd cb";
+    /// let mut state: Box<pest::ParserState<'_, Rule>> = pest::ParserState::new(input);
+    /// let mut result = state
+    ///     .stack_push(|state| state.match_string("a"))
+    ///     .and_then(|state| state.stack_push(|state| state.match_string("b")))
+    ///     .and_then(|state| state.stack_push(|state| state.match_string("c")))
+    ///     .and_then(|state| state.stack_push(|state| state.match_string("d")))
+    ///     .and_then(|state| state.match_string(" "))
+    ///     .and_then(|state| state.stack_match_peek_slice(2, None, MatchDir::BottomToTop))
+    ///     .and_then(|state| state.match_string(" "))
+    ///     .and_then(|state| state.stack_match_peek_slice(1, Some(-1), MatchDir::TopToBottom));
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().position().pos(), 10);
+    /// ```
+    #[inline]
+    pub fn stack_match_peek_slice_any(
+        mut self: Box<Self>,
+        start: i32,
+        end: Option<i32>,
+        // match_dir: MatchDir,
+    ) -> ParseResult<Box<Self>> {
+        let range = match constrain_idxs(start, end, self.stack.len()) {
+            Some(r) => r,
+            None => return Err(self),
+        };
+        // return true if an empty sequence is requested
+        if range.end <= range.start {
+            return Ok(self);
+        }
+
+        let mut position = self.position;
+        let result = {
+            let mut iter_b2t = self.stack[range].iter();
+            let matcher = |span: &Span<'_>| position.match_string(span.as_str());
+            iter_b2t.any(matcher)
+
+            // match match_dir {
+            //     MatchDir::BottomToTop => iter_b2t.all(matcher),
+            //     MatchDir::TopToBottom => iter_b2t.rev().all(matcher),
+            // }
+        };
+        if result {
+            self.position = position;
+            Ok(self)
+        } else {
+            Err(self)
+        }
+    }
+
+
+
     /// Matches the full state of the stack.
     ///
     /// # Examples
@@ -1103,6 +1164,31 @@ impl<'i, R: RuleType> ParserState<'i, R> {
     pub fn stack_match_peek(self: Box<Self>) -> ParseResult<Box<Self>> {
         self.stack_match_peek_slice(0, None, MatchDir::TopToBottom)
     }
+
+    /// Matches the full state of the stack.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pest;
+    /// # #[allow(non_camel_case_types)]
+    /// # #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    /// enum Rule {}
+    ///
+    /// let input = "abba";
+    /// let mut state: Box<pest::ParserState<'_, Rule>> = pest::ParserState::new(input);
+    /// let mut result = state
+    ///     .stack_push(|state| state.match_string("a"))
+    ///     .and_then(|state| { state.stack_push(|state| state.match_string("b")) })
+    ///     .and_then(|state| state.stack_match_peek());
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().position().pos(), 4);
+    /// ```
+    #[inline]
+    pub fn stack_match_peek_any(self: Box<Self>) -> ParseResult<Box<Self>> {
+        self.stack_match_peek_slice_any(0, None)
+    }
+
 
     /// Matches the full state of the stack. This method will clear the stack as it evaluates.
     ///

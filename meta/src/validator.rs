@@ -35,7 +35,7 @@ static RUST_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
 
 static PEST_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
-        "_", "ANY", "DROP", "EOI", "PEEK", "PEEK_ALL", "POP", "POP_ALL", "PUSH", "SOI",
+        "_", "ANY", "DROP", "EOI", "PEEK", "PEEK_ALL", "PEEK_ANY", "POP", "POP_ALL", "PUSH", "SOI",
     ]
     .iter()
     .cloned()
@@ -49,6 +49,8 @@ static BUILTINS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
         "EOI",
         "PEEK",
         "PEEK_ALL",
+        "PEEK_ANY",
+
         "POP",
         "POP_ALL",
         "SOI",

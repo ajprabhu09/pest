@@ -716,6 +716,23 @@ fn peek_all() {
 }
 
 #[test]
+fn peek_any() {
+    parses_to! {
+        parser: vm(),
+        input: "011",
+        rule: "peek_any",
+        tokens: [
+            peek_any(0, 3, [
+                range(0, 1),
+                range(1, 2)
+            ])
+        ]
+    };
+}
+
+
+
+#[test]
 fn peek_slice_23() {
     parses_to! {
         parser: vm(),

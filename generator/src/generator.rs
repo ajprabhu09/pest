@@ -111,6 +111,8 @@ fn generate_builtin_rules() -> Vec<(&'static str, TokenStream)> {
     insert_builtin!(builtins, POP, state.stack_pop());
     insert_builtin!(builtins, POP_ALL, state.stack_match_pop());
     insert_builtin!(builtins, DROP, state.stack_drop());
+    // TODO: this is a work in progress
+    insert_builtin!(builtins, PEEK_ANY, state.stack_match_peek_any());
 
     insert_builtin!(builtins, ASCII_DIGIT, state.match_range('0'..'9'));
     insert_builtin!(builtins, ASCII_NONZERO_DIGIT, state.match_range('1'..'9'));
