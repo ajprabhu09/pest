@@ -26,14 +26,29 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
+use generator::generate;
 use proc_macro2::TokenStream;
-use syn::{Attribute, DeriveInput, Generics, Ident, Lit, Meta};
+use syn::DeriveInput;
 
 #[macro_use]
 mod macros;
+
+#[cfg(feature = "export-internal")]
+pub mod docs;
+#[cfg(not(feature = "export-internal"))]
 mod docs;
+
+#[cfg(feature = "export-internal")]
+pub mod generator;
+#[cfg(not(feature = "export-internal"))]
 mod generator;
 
+#[cfg(feature = "export-internal")]
+pub mod parse_derive;
+#[cfg(not(feature = "export-internal"))]
+mod parse_derive;
+
+use crate::parse_derive::{parse_derive, GrammarSource};
 use pest_meta::parser::{self, rename_meta_rule, Rule};
 use pest_meta::{optimizer, unwrap_or_report, validator};
 
@@ -42,8 +57,9 @@ use pest_meta::{optimizer, unwrap_or_report, validator};
 /// "include_str" statement (done in pest_derive, but turned off in the local bootstrap).
 pub fn derive_parser(input: TokenStream, include_grammar: bool) -> TokenStream {
     let ast: DeriveInput = syn::parse2(input).unwrap();
-    let (name, generics, contents) = parse_derive(ast);
+    let (parsed_derive, contents) = parse_derive(ast);
 
+    // Grammar presented in a view of a string.
     let mut data = String::new();
     let mut paths = vec![];
 
@@ -81,12 +97,12 @@ pub fn derive_parser(input: TokenStream, include_grammar: bool) -> TokenStream {
         };
 
         data.push_str(&_data);
-        match _path {
-            Some(path) => paths.push(path),
-            None => (),
+        if let Some(path) = _path {
+            paths.push(path);
         }
     }
 
+    // `Rule::grammar_rules` is taken from meta/srd/parser.rs.
     let pairs = match parser::parse(Rule::grammar_rules, &data) {
         Ok(pairs) => pairs,
         Err(error) => panic!("error parsing \n{}", error.renamed_rules(rename_meta_rule)),
@@ -97,9 +113,8 @@ pub fn derive_parser(input: TokenStream, include_grammar: bool) -> TokenStream {
     let ast = unwrap_or_report(parser::consume_rules(pairs));
     let optimized = optimizer::optimize(ast);
 
-    generator::generate(
-        name,
-        &generics,
+    generate(
+        parsed_derive,
         paths,
         optimized,
         defaults,
@@ -115,133 +130,15 @@ fn read_file<P: AsRef<Path>>(path: P) -> io::Result<String> {
     Ok(string)
 }
 
-#[derive(Debug, PartialEq)]
-enum GrammarSource {
-    File(String),
-    Inline(String),
-}
-
-fn parse_derive(ast: DeriveInput) -> (Ident, Generics, Vec<GrammarSource>) {
-    let name = ast.ident;
-    let generics = ast.generics;
-
-    let grammar: Vec<&Attribute> = ast
-        .attrs
-        .iter()
-        .filter(|attr| match attr.parse_meta() {
-            Ok(Meta::NameValue(name_value)) => {
-                name_value.path.is_ident("grammar") || name_value.path.is_ident("grammar_inline")
-            }
-            _ => false,
-        })
-        .collect();
-
-    if grammar.is_empty() {
-        panic!("a grammar file needs to be provided with the #[grammar = \"PATH\"] or #[grammar_inline = \"GRAMMAR CONTENTS\"] attribute");
-    }
-
-    let mut grammar_sources = Vec::with_capacity(grammar.len());
-    for attr in grammar {
-        grammar_sources.push(get_attribute(attr))
-    }
-
-    (name, generics, grammar_sources)
-}
-
-fn get_attribute(attr: &Attribute) -> GrammarSource {
-    match attr.parse_meta() {
-        Ok(Meta::NameValue(name_value)) => match name_value.lit {
-            Lit::Str(string) => {
-                if name_value.path.is_ident("grammar") {
-                    GrammarSource::File(string.value())
-                } else {
-                    GrammarSource::Inline(string.value())
-                }
-            }
-            _ => panic!("grammar attribute must be a string"),
-        },
-        _ => panic!("grammar attribute must be of the form `grammar = \"...\"`"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::parse_derive;
-    use super::GrammarSource;
-
-    #[test]
-    fn derive_inline_file() {
-        let definition = "
-            #[other_attr]
-            #[grammar_inline = \"GRAMMAR\"]
-            pub struct MyParser<'a, T>;
-        ";
-        let ast = syn::parse_str(definition).unwrap();
-        let (_, _, filenames) = parse_derive(ast);
-        assert_eq!(filenames, [GrammarSource::Inline("GRAMMAR".to_string())]);
-    }
-
-    #[test]
-    fn derive_ok() {
-        let definition = "
-            #[other_attr]
-            #[grammar = \"myfile.pest\"]
-            pub struct MyParser<'a, T>;
-        ";
-        let ast = syn::parse_str(definition).unwrap();
-        let (_, _, filenames) = parse_derive(ast);
-        assert_eq!(filenames, [GrammarSource::File("myfile.pest".to_string())]);
-    }
-
-    #[test]
-    fn derive_multiple_grammars() {
-        let definition = "
-            #[other_attr]
-            #[grammar = \"myfile1.pest\"]
-            #[grammar = \"myfile2.pest\"]
-            pub struct MyParser<'a, T>;
-        ";
-        let ast = syn::parse_str(definition).unwrap();
-        let (_, _, filenames) = parse_derive(ast);
-        assert_eq!(
-            filenames,
-            [
-                GrammarSource::File("myfile1.pest".to_string()),
-                GrammarSource::File("myfile2.pest".to_string())
-            ]
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "grammar attribute must be a string")]
-    fn derive_wrong_arg() {
-        let definition = "
-            #[other_attr]
-            #[grammar = 1]
-            pub struct MyParser<'a, T>;
-        ";
-        let ast = syn::parse_str(definition).unwrap();
-        parse_derive(ast);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "a grammar file needs to be provided with the #[grammar = \"PATH\"] or #[grammar_inline = \"GRAMMAR CONTENTS\"] attribute"
-    )]
-    fn derive_no_grammar() {
-        let definition = "
-            #[other_attr]
-            pub struct MyParser<'a, T>;
-        ";
-        let ast = syn::parse_str(definition).unwrap();
-        parse_derive(ast);
-    }
 
     #[doc = "Matches dar\n\nMatch dar description\n"]
     #[test]
     fn test_generate_doc() {
         let input = quote! {
             #[derive(Parser)]
+            #[non_exhaustive]
             #[grammar = "../tests/test.pest"]
             pub struct TestParser;
         };
@@ -252,7 +149,7 @@ mod tests {
             #[doc = "A parser for JSON file.\nAnd this is a example for JSON parser.\n\n    indent-4-space\n"]
             #[allow(dead_code, non_camel_case_types, clippy::upper_case_acronyms)]
             #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-
+            #[non_exhaustive]
             pub enum Rule {
                 #[doc = "Matches foo str, e.g.: `foo`"]
                 r#foo,

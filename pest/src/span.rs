@@ -22,23 +22,13 @@ use crate::position;
 #[derive(Clone, Copy)]
 pub struct Span<'i> {
     input: &'i str,
-    /// # Safety
-    ///
-    /// Must be a valid character boundary index into `input`.
     start: usize,
-    /// # Safety
-    ///
-    /// Must be a valid character boundary index into `input`.
     end: usize,
 }
 
 impl<'i> Span<'i> {
     /// Create a new `Span` without checking invariants. (Checked with `debug_assertions`.)
-    ///
-    /// # Safety
-    ///
-    /// `input[start..end]` must be a valid subslice; that is, said indexing should not panic.
-    pub(crate) unsafe fn new_unchecked(input: &str, start: usize, end: usize) -> Span<'_> {
+    pub(crate) fn new_internal(input: &str, start: usize, end: usize) -> Span<'_> {
         debug_assert!(input.get(start..end).is_some());
         Span { input, start, end }
     }
@@ -144,8 +134,7 @@ impl<'i> Span<'i> {
     /// ```
     #[inline]
     pub fn start_pos(&self) -> position::Position<'i> {
-        // Span's start position is always a UTF-8 border.
-        unsafe { position::Position::new_unchecked(self.input, self.start) }
+        position::Position::new_internal(self.input, self.start)
     }
 
     /// Returns the `Span`'s end `Position`.
@@ -163,8 +152,7 @@ impl<'i> Span<'i> {
     /// ```
     #[inline]
     pub fn end_pos(&self) -> position::Position<'i> {
-        // Span's end position is always a UTF-8 border.
-        unsafe { position::Position::new_unchecked(self.input, self.end) }
+        position::Position::new_internal(self.input, self.end)
     }
 
     /// Splits the `Span` into a pair of `Position`s.
@@ -182,9 +170,8 @@ impl<'i> Span<'i> {
     /// ```
     #[inline]
     pub fn split(self) -> (position::Position<'i>, position::Position<'i>) {
-        // Span's start and end positions are always a UTF-8 borders.
-        let pos1 = unsafe { position::Position::new_unchecked(self.input, self.start) };
-        let pos2 = unsafe { position::Position::new_unchecked(self.input, self.end) };
+        let pos1 = position::Position::new_internal(self.input, self.start);
+        let pos2 = position::Position::new_internal(self.input, self.end);
 
         (pos1, pos2)
     }
@@ -210,6 +197,27 @@ impl<'i> Span<'i> {
     pub fn as_str(&self) -> &'i str {
         // Span's start and end positions are always a UTF-8 borders.
         &self.input[self.start..self.end]
+    }
+
+    /// Returns the input string of the `Span`.
+    ///
+    /// This function returns the input string of the `Span` as a `&str`. This is the source string
+    /// from which the `Span` was created. The returned `&str` can be used to examine the contents of
+    /// the `Span` or to perform further processing on the string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pest;
+    /// # use pest::Span;
+    ///
+    /// // Example: Get input string from a span
+    /// let input = "abc\ndef\nghi";
+    /// let span = Span::new(input, 1, 7).unwrap();
+    /// assert_eq!(span.get_input(), input);
+    /// ```
+    pub fn get_input(&self) -> &'i str {
+        self.input
     }
 
     /// Iterates over all lines (partially) covered by this span. Yielding a `&str` for each line.
@@ -285,6 +293,61 @@ impl<'i> Hash for Span<'i> {
         (self.input as *const str).hash(state);
         self.start.hash(state);
         self.end.hash(state);
+    }
+}
+
+/// Merges two spans into one.
+///
+/// This function merges two spans that are contiguous or overlapping into a single span
+/// that covers the entire range of the two input spans. This is useful when you want to
+/// aggregate information from multiple spans into a single entity.
+///
+/// The function checks if the input spans are overlapping or contiguous by comparing their
+/// start and end positions. If they are, a new span is created with the minimum start position
+/// and the maximum end position of the two input spans.
+///
+/// If the input spans are neither overlapping nor contiguous, the function returns None,
+/// indicating that a merge operation was not possible.
+///
+/// # Examples
+///
+/// ```
+/// # use pest;
+/// # use pest::Span;
+/// # use pest::merge_spans;
+///
+/// // Example 1: Contiguous spans
+/// let input = "abc\ndef\nghi";
+/// let span1 = Span::new(input, 1, 7).unwrap();
+/// let span2 = Span::new(input, 7, 11).unwrap();
+/// let merged = merge_spans(&span1, &span2).unwrap();
+/// assert_eq!(merged, Span::new(input, 1, 11).unwrap());
+///
+/// // Example 2: Overlapping spans
+/// let input = "abc\ndef\nghi";
+/// let span1 = Span::new(input, 1, 7).unwrap();
+/// let span2 = Span::new(input, 5, 11).unwrap();
+/// let merged = merge_spans(&span1, &span2).unwrap();
+/// assert_eq!(merged, Span::new(input, 1, 11).unwrap());
+///
+/// // Example 3: Non-contiguous spans
+/// let input = "abc\ndef\nghi";
+/// let span1 = Span::new(input, 1, 7).unwrap();
+/// let span2 = Span::new(input, 8, 11).unwrap();
+/// let merged = merge_spans(&span1, &span2);
+/// assert!(merged.is_none());
+/// ```
+pub fn merge_spans<'i>(a: &Span<'i>, b: &Span<'i>) -> Option<Span<'i>> {
+    if a.end() >= b.start() && a.start() <= b.end() {
+        // The spans overlap or are contiguous, so they can be merged.
+        Span::new(
+            a.get_input(),
+            core::cmp::min(a.start(), b.start()),
+            core::cmp::max(a.end(), b.end()),
+        )
+    } else {
+        // The spans don't overlap and aren't contiguous, so they can't be merged.
+        None
     }
 }
 
@@ -446,5 +509,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             lines
         );
+    }
+
+    #[test]
+    fn get_input_of_span() {
+        let input = "abc\ndef\nghi";
+        let span = Span::new(input, 1, 7).unwrap();
+
+        assert_eq!(span.get_input(), input);
+    }
+
+    #[test]
+    fn merge_contiguous() {
+        let input = "abc\ndef\nghi";
+        let span1 = Span::new(input, 1, 7).unwrap();
+        let span2 = Span::new(input, 7, 11).unwrap();
+        let merged = merge_spans(&span1, &span2).unwrap();
+
+        assert_eq!(merged, Span::new(input, 1, 11).unwrap());
+    }
+
+    #[test]
+    fn merge_overlapping() {
+        let input = "abc\ndef\nghi";
+        let span1 = Span::new(input, 1, 7).unwrap();
+        let span2 = Span::new(input, 5, 11).unwrap();
+        let merged = merge_spans(&span1, &span2).unwrap();
+
+        assert_eq!(merged, Span::new(input, 1, 11).unwrap());
+    }
+
+    #[test]
+    fn merge_non_contiguous() {
+        let input = "abc\ndef\nghi";
+        let span1 = Span::new(input, 1, 7).unwrap();
+        let span2 = Span::new(input, 8, 11).unwrap();
+        let merged = merge_spans(&span1, &span2);
+
+        assert!(merged.is_none());
     }
 }
